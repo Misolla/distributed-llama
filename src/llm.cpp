@@ -193,6 +193,15 @@ LlmNet buildLlmNet(LlmHeader *h, NnUint nNodes, NnUint nBatches) {
         start.addSync(n.xPipeIndex, SYNC_WITH_ROOT);
         nodeBuilder.addSegment(start.build());
 
+
+        // // change for pipeline parallel
+        // // Split layers across nodes
+        // int startLayer = (nodeIndex * h->nLayers) / nNodes;   // Determine the start layer for the node
+        // int endLayer = ((nodeIndex + 1) * h->nLayers) / nNodes; // Determine the end layer for the node
+
+        // for (int layerIndex = startLayer; layerIndex < endLayer; layerIndex++) {
+        // // Process only the assigned layers for this node
+
         for (NnUint layerIndex = 0; layerIndex < h->nLayers; layerIndex++) {
             const NnUint kBufferIndex = nodeBuilder.addBuffer("k", kvCacheSlice.keySize);
             const NnUint vBufferIndex = nodeBuilder.addBuffer("v", kvCacheSlice.valueSize);
@@ -312,6 +321,12 @@ LlmNet buildLlmNet(LlmHeader *h, NnUint nNodes, NnUint nBatches) {
                 size0(),
                 NnCastOpCodeConfig{});
             att.addSync(zqPipeIndex, SYNC_NODE_SLICES);
+
+            // if (nodeIndex < nNodes - 1) { // Not the last node
+            //     att.addSync(n.xPipeIndex, SYNC_WITH_NEXT_NODE);  // Sync with the next node
+            // } else {
+            //     att.addSync(zqPipeIndex, SYNC_NODE_SLICES);  // Sync at the last node
+            // }
 
             // ff
             ff.addOp(

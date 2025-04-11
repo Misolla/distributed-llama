@@ -8,6 +8,16 @@
 #include "app.hpp"
 #include <stdexcept>
 
+static void processStage(AppInferenceContext *context, const std::vector<int>& layers, NnUint &pos, int *inputTokens, int nInputTokens) {
+    for (int layer : layers) {
+        context->inference->setPosition(pos);
+        context->inference->setToken(0, inputTokens[pos]);
+
+        context->inference->forward();
+        pos++;
+    }
+}
+
 static void inference(AppInferenceContext *context) {
     if (context->args->prompt == nullptr)
         throw std::runtime_error("Prompt is required");
@@ -33,37 +43,20 @@ static void inference(AppInferenceContext *context) {
     NnUint predTotalTime = 0;
 
     printf("%s\n", context->args->prompt);
-    for (;;) {
-        long remainingTokens = nInputTokens - 1 - (long)pos;
-        if (remainingTokens <= 0)
-            break;
-        NnUint batchSize = remainingTokens < context->args->nBatches
-            ? remainingTokens
-            : context->args->nBatches;
 
-        context->inference->setBatchSize(batchSize);
-        context->inference->setPosition(pos);
-        for (NnUint i = 0; i < batchSize; i++)
-            context->inference->setToken(i, inputTokens[pos + i]);
+    // Divide layers into groups (e.g., 3 stages)
+    std::vector<int> stage1_layers = {0, 1, 2, 3};
+    std::vector<int> stage2_layers = {4, 5, 6, 7};
+    std::vector<int> stage3_layers = {8, 9, 10, 11};
 
-        context->inference->forward();
+    // Process the first stage
+    processStage(context, stage1_layers, pos, inputTokens, nInputTokens);
 
-        pos += batchSize;
-        token = inputTokens[pos + 1];
+    // Process the second stage
+    processStage(context, stage2_layers, pos, inputTokens, nInputTokens);
 
-        if (context->network != nullptr)
-            context->network->getStats(&sentBytes, &recvBytes);
-
-        NnUint evalTime = context->executor->getTotalTime(STEP_EXECUTE_OP);
-        NnUint syncTime = context->executor->getTotalTime(STEP_SYNC_NODES);
-        printf("🔷️ Eval%5u ms Sync%5u ms | Sent%6zu kB Recv%6zu kB | (%d tokens)\n",
-            evalTime / 1000,
-            syncTime / 1000,
-            sentBytes / 1024,
-            recvBytes / 1024,
-            batchSize);
-        evalTotalTime += evalTime + syncTime;
-    }
+    // Process the third stage
+    processStage(context, stage3_layers, pos, inputTokens, nInputTokens);
 
     fflush(stdout);
 
@@ -94,6 +87,68 @@ static void inference(AppInferenceContext *context) {
         fflush(stdout);
         predTotalTime += predTime + syncTime;
     }
+
+    // for (;;) {
+    //     long remainingTokens = nInputTokens - 1 - (long)pos;
+    //     if (remainingTokens <= 0)
+    //         break;
+    //     NnUint batchSize = remainingTokens < context->args->nBatches
+    //         ? remainingTokens
+    //         : context->args->nBatches;
+
+    //     context->inference->setBatchSize(batchSize);
+    //     context->inference->setPosition(pos);
+    //     for (NnUint i = 0; i < batchSize; i++)
+    //         context->inference->setToken(i, inputTokens[pos + i]);
+
+    //     context->inference->forward();
+
+    //     pos += batchSize;
+    //     token = inputTokens[pos + 1];
+
+    //     if (context->network != nullptr)
+    //         context->network->getStats(&sentBytes, &recvBytes);
+
+    //     NnUint evalTime = context->executor->getTotalTime(STEP_EXECUTE_OP);
+    //     NnUint syncTime = context->executor->getTotalTime(STEP_SYNC_NODES);
+    //     printf("🔷️ Eval%5u ms Sync%5u ms | Sent%6zu kB Recv%6zu kB | (%d tokens)\n",
+    //         evalTime / 1000,
+    //         syncTime / 1000,
+    //         sentBytes / 1024,
+    //         recvBytes / 1024,
+    //         batchSize);
+    //     evalTotalTime += evalTime + syncTime;
+    // }
+
+    // fflush(stdout);
+
+    // context->inference->setBatchSize(1);
+    // context->tokenizer->resetDecoder();
+
+    // const NnUint maxPos = std::min(context->header->seqLen, context->args->steps);
+    // for (; pos < maxPos; pos++) {
+    //     context->inference->setPosition(pos);
+    //     context->inference->setToken(0, token);
+    //     context->inference->forward();
+
+    //     token = context->sampler->sample(context->inference->logitsPipe);
+
+    //     char *piece = context->tokenizer->decode(token);
+
+    //     if (context->network != nullptr)
+    //         context->network->getStats(&sentBytes, &recvBytes);
+
+    //     NnUint predTime = context->executor->getTotalTime(STEP_EXECUTE_OP);
+    //     NnUint syncTime = context->executor->getTotalTime(STEP_SYNC_NODES);
+    //     printf("🔶 Pred%5u ms Sync%5u ms | Sent%6zu kB Recv%6zu kB | %s\n",
+    //         predTime / 1000,
+    //         syncTime / 1000,
+    //         sentBytes / 1024,
+    //         recvBytes / 1024,
+    //         piece == nullptr ? "~" : piece);
+    //     fflush(stdout);
+    //     predTotalTime += predTime + syncTime;
+    // }
 
     NnUint nEvalTokens = nInputTokens - 1;
     NnUint nPredTokens = pos - nEvalTokens;
