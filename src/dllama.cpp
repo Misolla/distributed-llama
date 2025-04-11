@@ -10,6 +10,11 @@
 
 static void processStage(AppInferenceContext *context, const std::vector<int>& layers, NnUint &pos, int *inputTokens, int nInputTokens) {
     for (int layer : layers) {
+        // Ensure we don't exceed seqLen
+        if (pos >= context->header->seqLen) {
+            throw std::runtime_error("Position exceeds sequence length");
+        }
+
         context->inference->setPosition(pos);
         context->inference->setToken(0, inputTokens[pos]);
 
@@ -63,7 +68,58 @@ static void inference(AppInferenceContext *context) {
     context->inference->setBatchSize(1);
     context->tokenizer->resetDecoder();
 
+   // Adjusted loop to handle batch size dynamically and ensure we don't exceed seqLen
     const NnUint maxPos = std::min(context->header->seqLen, context->args->steps);
+    for (; pos < maxPos; pos++) {
+        // Calculate remaining tokens and adjust batch size to fit within seqLen
+        long remainingTokens = nInputTokens - 1 - (long)pos;
+        if (remainingTokens <= 0)
+            break;
+
+        // Dynamically adjust batch size
+        NnUint batchSize = remainingTokens < context->args->nBatches
+            ? remainingTokens
+            : context->args->nBatches;
+        
+        NnUint maxBatchSize = context->header->seqLen - pos; // Ensure batch size doesn't exceed seqLen
+        batchSize = std::min(batchSize, maxBatchSize);
+
+        // Set position and batch size
+        context->inference->setBatchSize(batchSize);
+        context->inference->setPosition(pos);
+
+        // Set tokens for the current batch
+        for (NnUint i = 0; i < batchSize; i++) {
+            context->inference->setToken(i, inputTokens[pos + i]);
+        }
+
+        context->inference->forward();
+
+        // Update the position and token after processing the batch
+        pos += batchSize;
+        token = inputTokens[pos];
+
+        // Collect stats if network is available
+        if (context->network != nullptr)
+            context->network->getStats(&sentBytes, &recvBytes);
+
+        // Measure execution time for the batch
+        NnUint evalTime = context->executor->getTotalTime(STEP_EXECUTE_OP);
+        NnUint syncTime = context->executor->getTotalTime(STEP_SYNC_NODES);
+        printf("🔷️ Eval%5u ms Sync%5u ms | Sent%6zu kB Recv%6zu kB | (%d tokens)\n",
+            evalTime / 1000,
+            syncTime / 1000,
+            sentBytes / 1024,
+            recvBytes / 1024,
+            batchSize);
+        evalTotalTime += evalTime + syncTime;
+    }
+
+    // Final prediction loop
+    context->inference->setBatchSize(1);
+    context->tokenizer->resetDecoder();
+
+    // Final loop to generate predictions
     for (; pos < maxPos; pos++) {
         context->inference->setPosition(pos);
         context->inference->setToken(0, token);
